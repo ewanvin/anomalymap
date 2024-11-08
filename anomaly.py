@@ -136,8 +136,6 @@ def calculate_anomaly(dataset,cfgstr,mylog):
                     anom_period_2 = xr.where(np.isnan(anom_period_2), np.nan, anom_period_2)
                     mylog.info('Calculation of anomalies completed.')
 
-                    print('anom_period_1',anom_period_1)
-                    print('anom_period_2',anom_period_2)
 
                     return anom_period_1, anom_period_2
 
@@ -179,21 +177,6 @@ def calculate_anomaly(dataset,cfgstr,mylog):
 
         return   
 
-"""
-def create_dataset(dataset, anom_period_1, anom_period_2):
-    # Assign new variables
-    dataset['anom_period_1'] = anom_period_1
-    dataset['anom_period_2'] = anom_period_2
-
-    return dataset
-
-def create_cropped_dataset(cropped, anom_period_1, anom_period_2):
-    # Assign new variables 
-    cropped['anom_period_1'] = anom_period_1 
-    cropped['anom_period_2'] = anom_period_2
-
-    return cropped
-"""
 
 # Get dimensions using ncdump
 def get_dimensions(file_pattern):
@@ -201,7 +184,6 @@ def get_dimensions(file_pattern):
     print(f"Files: {filenames}")  
     dimensions = {}
     for filename in filenames:
-        print(f"Reading dimensions from: {filename}")  
         result = subprocess.run(['ncdump', '-h', filename], stdout=subprocess.PIPE)
         output = result.stdout.decode('utf-8')
         lines = output.split('\n')
@@ -262,6 +244,7 @@ def main():
     # Load dataset 
     #ds = xr.open_dataset(cfgstr['input']['datafile'], chunks={'xc': 1300, 'yc': 1300, 'time': 1000})
     #ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks={'time': 3, 'x': 6000, 'y': 5000})
+    
     ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks=chunks)
 
     # Remove 'uncertainty' if present in Dataset 
