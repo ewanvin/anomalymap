@@ -9,6 +9,9 @@ import numpy as np
 import dask
 from dask.diagnostics import ProgressBar, ResourceProfiler
 import pandas as pd 
+import subprocess
+import glob
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -45,8 +48,7 @@ def initialise_logger(outputfile):
 def calculate_anomaly(dataset,cfgstr,mylog):
     # Get variable name from cfgstr
     var_name = cfgstr['input']['variable']
-    png_output = cfgstr['output']['png_output']
-
+    
     # Extract endpoint time
     endpoint = dataset.time[-1].values
     print('Endpoint:',endpoint)
@@ -72,90 +74,112 @@ def calculate_anomaly(dataset,cfgstr,mylog):
     date_string_1 = span_1.strftime('%Y-%m-%d')
     date_string_2 = span_2.strftime('%Y-%m-%d')
 
-    if 'data_endpoint' in cfgstr['input'] and cfgstr['input']['data_endpoint']:
-        print('Reading OpenDAP link...')
-        link = cfgstr['input']['data_endpoint']
-         
-        # Slicing Dataset
-        cropped = dataset.sel(xc=slice(0, -3250))
-        
-        print(cropped.dims)
+    #if 'data_endpoint' in cfgstr['input'] and cfgstr['input']['data_endpoint']:
+    if 'input' in cfgstr and cfgstr['input'] is not None:
+        if 'cropped' in cfgstr['input']:
+            if cfgstr['input']['cropped'] == 'Yes':
+                print('Cropping data...')
+            
+                # Slicing Dataset
+                cropped = dataset.sel(xc=slice(0, -3250))
+                
+                # Closing Dataset
+                dataset.close()
 
-        # Closing Dataset
-        dataset.close()
+                cropped_nbytes_gb = cropped.nbytes / (1024*1024*1024)
+                
+                print('Cropped Dataset size in GB:', cropped_nbytes_gb)
+                mylog.info('Cropped Dataset size in GB: %s', cropped_nbytes_gb)
+                
+                # Calculate the mean for the entire dataset
+                mean = cropped[var_name].mean(dim='time')
+                            
+                # Select the time range for each period
+                mylog.info('Selecting time range for each period...')
+                period_1 = cropped[var_name].sel(time=slice(f'{date_string_1}', f'{str(dataset.time[-1].values)}'))
+                period_2 = cropped[var_name].sel(time=slice(f'{date_string_2}', f'{date_string_1}'))
+                mylog.info('Time range selection done.')
 
-        cropped_nbytes_gb = cropped.nbytes / (1024*1024*1024)
+                # Calculate the anomalies for each period
+                anom_period_1 = period_1.mean(dim='time') - mean
+                anom_period_1 = xr.where(np.isnan(anom_period_1), np.nan, anom_period_1)
+                
+                anom_period_2 = period_2.mean(dim='time') - mean
+                anom_period_2 = xr.where(np.isnan(anom_period_2), np.nan, anom_period_2)
+            
+                mylog.info('Computing anoamly periods 1 and 2...')
+                # Compute all results at once
+                anom_period_1 = dask.compute(anom_period_1, scheduler='synchronous')[0]
+                anom_period_2 = dask.compute(anom_period_2, scheduler='synchronous')[0]
+                mylog.info('Computation of anoamly periods 1 and 2 finished')
+
+                return cropped,anom_period_1, anom_period_2 
         
-        print('Cropped Dataset size in GB:', cropped_nbytes_gb)
-        mylog.info('Cropped Dataset size in GB: %s', cropped_nbytes_gb)
-        
-        # Calculate the mean for the entire dataset
-        mean = cropped[var_name].mean(dim='time')
+            elif cfgstr['input']['cropped'] == 'No':
+                print('Data does not need to be cropped.')
+
+                if len(dataset.dims) > 2:
+                    print('The dataset has more than 4 dimensions.')
+                    # Compute mean of the Dataset
+                    mean = dataset[var_name].mean(dim='time')
                     
-        # Select the time range for each period
-        mylog.info('Selecting time range for each period...')
-        period_1 = cropped[var_name].sel(time=slice(f'{date_string_1}', f'{str(dataset.time[-1].values)}'))
-        period_2 = cropped[var_name].sel(time=slice(f'{date_string_2}', f'{date_string_1}'))
-        mylog.info('Time range selection done.')
+                    mylog.info('Selecting time range for each period...')
+                    period_1 = dataset[var_name].sel(time=slice(f'{date_string_1}', f'{str(dataset.time[-1].values)}'))
+                    period_2 = dataset[var_name].sel(time=slice(f'{date_string_2}', f'{date_string_1}'))
+                    mylog.info('Time range selection done.')
 
-        mylog.info('Calculating anoamlies for each period...')
-        # Calculate the anomalies for each period
-        anom_period_1 = period_1.mean(dim='time') - mean
-        anom_period_1 = xr.where(np.isnan(anom_period_1), np.nan, anom_period_1)
-        
-        anom_period_2 = period_2.mean(dim='time') - mean
-        anom_period_2 = xr.where(np.isnan(anom_period_2), np.nan, anom_period_2)
-        mylog.info('Calculation of anoamlies completed.')
-              
-        return cropped,anom_period_1, anom_period_2 
-    
+                    mylog.info('Calculating anomalies for each period...')
+                    anom_period_1 = period_1.mean(dim='time') - mean
+                    anom_period_1 = xr.where(np.isnan(anom_period_1), np.nan, anom_period_1)
+                    
+                    anom_period_2 = period_2.mean(dim='time') - mean
+                    anom_period_2 = xr.where(np.isnan(anom_period_2), np.nan, anom_period_2)
+                    mylog.info('Calculation of anomalies completed.')
 
-    elif len(dataset.dims) > 2:
-        print('The dataset has more than 4 dimensions')
-        # Compute mean of the Dataset
-        mean = dataset[var_name].mean(dim='time')
-        
-        mylog.info('Selecting time range for each period...')
-        period_1 = dataset[var_name].sel(time=slice(f'{date_string_1}', f'{str(dataset.time[-1].values)}'))
-        period_2 = dataset[var_name].sel(time=slice(f'{date_string_2}', f'{date_string_1}'))
-        mylog.info('Time range selection done.')
+                    print('anom_period_1',anom_period_1)
+                    print('anom_period_2',anom_period_2)
 
-        
+                    return anom_period_1, anom_period_2
 
-        mylog.info('Calculating anomalies for each period...')
-        anom_period_1 = period_1.mean(dim='time') - mean
-        anom_period_1 = xr.where(np.isnan(anom_period_1), np.nan, anom_period_1)
-        
-        anom_period_2 = period_2.mean(dim='time') - mean
-        anom_period_2 = xr.where(np.isnan(anom_period_2), np.nan, anom_period_2)
-        mylog.info('Calculation of anomalies completed.')
+                elif len(dataset.dims) == 2:
+                    print('The dataset has 2 dimensions.')
+                    
+                    # Use variable name to select data from dataset
+                    period_1 = dataset[var_name].sel(time=slice(f'{date_string_1}', f'{str(dataset.time[-1].values)}'))
+                    period_2 = dataset[var_name].sel(time=slice(f'{date_string_2}', f'{date_string_1}'))
+                    
+                    # Group by month and calculate mean for each period
+                    gb_period_1 = period_1.groupby('time.day')
+                    gb_period_2 = period_2.groupby('time.day')
+                    
+                    clim_period_1 = gb_period_1.mean(dim='time')
+                    clim_period_2 = gb_period_2.mean(dim='time')
+                    
+                    # Calculate anomalies for each period
+                    anom_period_1 = gb_period_1 - clim_period_1
+                    anom_period_2 = gb_period_2 - clim_period_2
 
-        return anom_period_1, anom_period_2
+                    print('Size of anomaly period 1', anom_period_1.nbytes / (1024*1024), 'MB')
+                    print('Size of anomaly period 2', anom_period_2.nbytes / (1024*1024), 'MB')
 
-    elif len(dataset.dims) == 2:
-        
-        # Use variable name to select data from dataset
-        period_1 = dataset[var_name].sel(time=slice(f'{date_string_1}', f'{str(dataset.time[-1].values)}'))
-        period_2 = dataset[var_name].sel(time=slice(f'{date_string_2}', f'{date_string_1}'))
-        
-        # Group by month and calculate mean for each period
-        gb_period_1 = period_1.groupby('time.day')
-        gb_period_2 = period_2.groupby('time.day')
-        
-        clim_period_1 = gb_period_1.mean(dim='time')
-        clim_period_2 = gb_period_2.mean(dim='time')
-        
-        # Calculate anomalies for each period
-        anom_period_1 = gb_period_1 - clim_period_1
-        anom_period_2 = gb_period_2 - clim_period_2
+                    return anom_period_1, anom_period_2
+            
+            elif cfgstr['input']['cropped'] == '':
+                print('cropped key is empty.')
 
-        print('Size of anomaly period 1', anom_period_1.nbytes / (1024*1024), 'MB')
-        print('Size of anomaly period 2', anom_period_2.nbytes / (1024*1024), 'MB')
+                return 
+            
+        else:
+            print('cropped is not defined in the configuration file.')
 
-        return anom_period_1, anom_period_2
-     
+            return    
 
+    else: 
+        print("'input' key is not defined in the configuration file") 
 
+        return   
+
+"""
 def create_dataset(dataset, anom_period_1, anom_period_2):
     # Assign new variables
     dataset['anom_period_1'] = anom_period_1
@@ -169,6 +193,47 @@ def create_cropped_dataset(cropped, anom_period_1, anom_period_2):
     cropped['anom_period_2'] = anom_period_2
 
     return cropped
+"""
+
+# Get dimensions using ncdump
+def get_dimensions(file_pattern):
+    filenames = glob.glob(file_pattern)
+    print(f"Files: {filenames}")  
+    dimensions = {}
+    for filename in filenames:
+        print(f"Reading dimensions from: {filename}")  
+        result = subprocess.run(['ncdump', '-h', filename], stdout=subprocess.PIPE)
+        output = result.stdout.decode('utf-8')
+        lines = output.split('\n')
+        for line in lines:
+            if line.startswith('\t') and '=' in line and ':' not in line:
+                parts = line.split(' = ')
+                if len(parts) == 2 and parts[1].endswith(' ;'):
+                    key = parts[0].lstrip()  # Remove leading whitespace
+                    dimensions[key] = int(parts[1].rstrip(' ;'))
+    print(f'Dimensions: {dimensions}') 
+    return dimensions
+
+
+def write_to_netcdf(dataset, cfgstr, period):
+    filename = cfgstr['output']['datafile'].replace('.nc',f'_anom_period_{period}.nc')
+    
+    dims = list(dataset.sizes.keys())
+    coord_len_1 = dataset.sizes[dims[0]]
+    coord_len_2 = dataset.sizes[dims[1]]
+    print('dims:',dims)
+    print('coordinate 1:', coord_len_1)
+    print('coordinate 2:', coord_len_2)
+    # Calculate chunksizes
+    chunksizes = (int(coord_len_1 / 15), int(coord_len_2 / 15))
+    print('chunksizes:',chunksizes)
+
+    # Chunk handling for large datasets 
+    if dataset.nbytes > 5000000000:
+        dataset.to_netcdf(filename, encoding={cfgstr['input']['variable']: {'zlib': True, 'complevel': 9, 'chunksizes': chunksizes, 'dtype': 'float64'}})
+    else:
+        dataset.to_netcdf(filename)
+
 
 def main():
 
@@ -176,18 +241,23 @@ def main():
     cfgstr = parse_cfg(args.cfgfile)
     mylog = initialise_logger(cfgstr['output']['logfile'])
 
-    # Load dataset 
-    ds = xr.open_dataset(cfgstr['input']['datafile'], chunks={'xc': 1300, 'yc': 1300, 'time': 1000})
-    #ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks={'time': 3, 'lat': 800, 'lon': 12000}) 
+    dimensions = get_dimensions(cfgstr['input']['datafile']) 
+    dim_names = list(dimensions.keys())
+    print('dim_names:',dim_names)
 
-    # Remove 'uncertainty' if present in dataset
+    chunks = {dim_names[0]: dimensions[dim_names[0]] // 3, dim_names[1]: dimensions[dim_names[1]] // 2, dim_names[2]: dimensions[dim_names[2]] // 2} 
+
+    # Load dataset 
+    #ds = xr.open_dataset(cfgstr['input']['datafile'], chunks={'xc': 1300, 'yc': 1300, 'time': 1000})
+    #ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks={'time': 3, 'x': 6000, 'y': 5000})
+    ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks=chunks)
+
+    # Remove 'uncertainty' if present in Dataset 
     if 'uncertainty' in ds.variables:
-        print("Dropping 'uncertainty' variables from Dataset")
+        print("Dropping 'uncertainty' variable from Dataset")
         ds = ds.drop_vars(['uncertainty'])
     else:
         print("'uncertainty' variable not found in Dataset. Skipping removal.")
-
-        
 
     mylog.info('\n')
     # Print the size of the dataset 
@@ -196,46 +266,42 @@ def main():
 
     # Calculate anomaly 
     try:
-        if 'data_endpoint' in cfgstr['input'] and cfgstr['input']['data_endpoint']:
-            with ProgressBar():
-                cropped, anom_period_1, anom_period_2 = calculate_anomaly(ds,cfgstr,mylog)
-            
-            # Add anomaly periods to dataset
-            mylog.info('Creating new cropped dataset...')
-            cropped_new = create_cropped_dataset(cropped, anom_period_1, anom_period_2)
-            mylog.info('Creation of new cropped dataset complete.')
-            
-            # Write to file
-            mylog.info('Writing new dataset to NetCDF...')
-            with ProgressBar(), ResourceProfiler(dt=0.25) as rprof:
-                cropped_new.to_netcdf(cfgstr['output']['datafile'], encoding={'sca': {'zlib': True, 'complevel': 9, 'chunksizes': (500, 450, 700), 'dtype': 'float64'},
-                    'time_bounds': {'zlib': True, 'complevel': 9, 'chunksizes': (500,2), 'dtype': 'float64'},
-                    'lon': {'zlib': True, 'complevel': 9, 'chunksizes': (450, 700), 'dtype': 'float64'},
-                    'lat': {'zlib': True, 'complevel': 9, 'chunksizes': (450, 700), 'dtype': 'float64'},
-                    'lmask': {'zlib': True, 'complevel': 9, 'chunksizes': (450, 700), 'dtype': 'float64'},
-                    'anom_period_1': {'zlib': True, 'complevel': 9, 'chunksizes': (450, 700), 'dtype': 'float64'},
-                    'anom_period_2': {'zlib': True, 'complevel': 9, 'chunksizes': (450, 700), 'dtype': 'float64'}})
-            mylog.info('NetCDF have been written to output dir.')
+        if 'input' in cfgstr and cfgstr['input'] is not None:
+            if 'cropped' in cfgstr['input']:
+                if cfgstr['input']['cropped'] == 'Yes':
+                    with ProgressBar():
+                        cropped, anom_period_1, anom_period_2 = calculate_anomaly(ds,cfgstr,mylog)
+                    
+                    # Write to file
+                    mylog.info('Writing anomaly periods to individual NetCDFs...')
+                    write_to_netcdf(anom_period_1, cfgstr, 1)
+                    write_to_netcdf(anom_period_2, cfgstr, 2)
+                    mylog.info('NetCDFs have been written to output dir.')
+                    
+
+                elif cfgstr['input']['cropped'] == 'No':
+                    mylog.info('Calculating anomaly periods...')
+                    with ProgressBar():
+                        anom_period_1, anom_period_2 = calculate_anomaly(ds,cfgstr,mylog)
+                    mylog.info('Calculation of anomaly periods complete.')
+
+                    mylog.info('Writing anomaly periods to individual NetCDFs...')
+                    write_to_netcdf(anom_period_1, cfgstr, 1)
+                    write_to_netcdf(anom_period_2, cfgstr, 2)
+                    mylog.info('NetCDFs have been written to output dir.')
+
+
+                elif cfgstr['input']['cropped'] == '':
+                    print('cropped is empty in configuration file. Provide Yes/No.')
+                    pass
+
+                else:
+                    print('cropped is not defined in the configuration file')
+                    pass 
         else:
-            mylog.info('Calculating anomaly periods...')
-            with ProgressBar(), ResourceProfiler(dt=0.25) as rprof:
-                anom_period_1, anom_period_2 = calculate_anomaly(ds,cfgstr,mylog)
-            mylog.info('Calculation of anomaly periods complete.')
-
+            print('input key in configuration file is None.')
+            pass
             
-
-            mylog.info('Creating new dataset...')
-            ds_new = create_dataset(ds, anom_period_1, anom_period_2)
-            mylog.info('Creation of new dataset complete.')
-                        
-            mylog.info('Writing new dataset to NetCDF...')
-            with ProgressBar(), ResourceProfiler(dt=0.25) as rprof:
-                ds_new.to_netcdf(cfgstr['output']['datafile'], encoding={'FSC_STD': {'zlib': True, 'complevel': 9, 'chunksizes': (1, 350, 600), 'dtype': 'float64'},
-                'Bit_Flags': {'zlib': True, 'complevel': 9, 'chunksizes': (1,350,600), 'dtype': 'float64'},
-                'FSC': {'zlib': True, 'complevel': 9, 'chunksizes': (1,350,600), 'dtype': 'float64'}})
-            mylog.info('NetCDF have been written to output dir.')
-
-            rprof.visualize()
 
     except Exception as e:
         mylog.error('Failed to calculate anomaly %s', e)
