@@ -219,18 +219,25 @@ def write_to_netcdf(dataset, cfgstr, period):
     filename = cfgstr['output']['datafile'].replace('.nc',f'_anom_period_{period}.nc')
     
     dims = list(dataset.sizes.keys())
-    coord_len_1 = dataset.sizes[dims[0]]
-    coord_len_2 = dataset.sizes[dims[1]]
     print('dims:',dims)
-    print('coordinate 1:', coord_len_1)
-    print('coordinate 2:', coord_len_2)
-    # Calculate chunksizes
-    chunksizes = (int(coord_len_1 / 15), int(coord_len_2 / 15))
+    chunksizes = []
+    encoding_dict = {cfgstr['input']['variable']: {'zlib': True, 'complevel': 9, 'dtype': 'float64'}}
+
+    # Calculate chunksizes for each dimension
+    for dim in dims:
+        coord_len = dataset.sizes[dim]
+        print(f'coordinate {dim}:', coord_len)
+        chunksizes.append(int(coord_len / 15))
+
+    # Add chunksizes to encoding dict if more than one dimension
+    if len(dims) > 1:
+        encoding_dict[cfgstr['input']['variable']]['chunksizes'] = tuple(chunksizes)
+    
     print('chunksizes:',chunksizes)
 
     # Chunk handling for large datasets 
     if dataset.nbytes > 5000000000:
-        dataset.to_netcdf(filename, encoding={cfgstr['input']['variable']: {'zlib': True, 'complevel': 9, 'chunksizes': chunksizes, 'dtype': 'float64'}})
+        dataset.to_netcdf(filename, encoding=encoding_dict)
     else:
         dataset.to_netcdf(filename)
 
@@ -245,8 +252,13 @@ def main():
     dim_names = list(dimensions.keys())
     print('dim_names:',dim_names)
 
-    chunks = {dim_names[0]: dimensions[dim_names[0]] // 3, dim_names[1]: dimensions[dim_names[1]] // 2, dim_names[2]: dimensions[dim_names[2]] // 2} 
+    # Define chunk sizes based on the dimensions
+    if len(dim_names) == 3:
+        chunks = {dim_names[0]: dimensions[dim_names[0]] // 3, dim_names[1]: dimensions[dim_names[1]] // 2, dim_names[2]: dimensions[dim_names[2]] // 2}
+    elif len(dim_names) == 2:
+        chunks = {dim_names[0]: dimensions[dim_names[0]] // 2, dim_names[1]: dimensions[dim_names[1]] // 2}
 
+    
     # Load dataset 
     #ds = xr.open_dataset(cfgstr['input']['datafile'], chunks={'xc': 1300, 'yc': 1300, 'time': 1000})
     #ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks={'time': 3, 'x': 6000, 'y': 5000})
