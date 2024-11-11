@@ -181,7 +181,7 @@ def calculate_anomaly(dataset,cfgstr,mylog):
 # Get dimensions using ncdump
 def get_dimensions(file_pattern):
     filenames = glob.glob(file_pattern)
-    print(f"Files: {filenames}")  
+    #print(f"Files: {filenames}")  
     dimensions = {}
     for filename in filenames:
         result = subprocess.run(['ncdump', '-h', filename], stdout=subprocess.PIPE)
@@ -193,7 +193,7 @@ def get_dimensions(file_pattern):
                 if len(parts) == 2 and parts[1].endswith(' ;'):
                     key = parts[0].lstrip()  # Remove leading whitespace
                     dimensions[key] = int(parts[1].rstrip(' ;'))
-    print(f'Dimensions: {dimensions}') 
+    print(f'Dimensions found in the dataset: {dimensions}') 
     return dimensions
 
 
@@ -201,21 +201,21 @@ def write_to_netcdf(dataset, cfgstr, period):
     filename = cfgstr['output']['datafile'].replace('.nc',f'_anom_period_{period}.nc')
     
     dims = list(dataset.sizes.keys())
-    print('dims:',dims)
+    #print('dims:',dims)
     chunksizes = []
     encoding_dict = {cfgstr['input']['variable']: {'zlib': True, 'complevel': 9, 'dtype': 'float64'}}
 
     # Calculate chunksizes for each dimension
     for dim in dims:
         coord_len = dataset.sizes[dim]
-        print(f'coordinate {dim}:', coord_len)
+        #print(f'coordinate {dim}:', coord_len)
         chunksizes.append(int(coord_len / 15))
 
     # Add chunksizes to encoding dict if more than one dimension
     if len(dims) > 1:
         encoding_dict[cfgstr['input']['variable']]['chunksizes'] = tuple(chunksizes)
     
-    print('chunksizes:',chunksizes)
+    #print('chunksizes:',chunksizes)
 
     # Chunk handling for large datasets 
     if dataset.nbytes > 5000000000:
@@ -232,7 +232,6 @@ def main():
 
     dimensions = get_dimensions(cfgstr['input']['datafile']) 
     dim_names = list(dimensions.keys())
-    print('dim_names:',dim_names)
 
     # Define chunk sizes based on the dimensions
     if len(dim_names) == 3:
@@ -241,11 +240,12 @@ def main():
         chunks = {dim_names[0]: dimensions[dim_names[0]] // 2, dim_names[1]: dimensions[dim_names[1]] // 2}
 
     
-    # Load dataset 
-    #ds = xr.open_dataset(cfgstr['input']['datafile'], chunks={'xc': 1300, 'yc': 1300, 'time': 1000})
-    #ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks={'time': 3, 'x': 6000, 'y': 5000})
-    
-    ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks=chunks)
+    # Load either single or multiple dataset
+    if cfgstr['input'].get('read_multiple_files', 'No') == 'Yes':
+        ds = xr.open_mfdataset(cfgstr['input']['datafile'], chunks=chunks)
+    else:
+        ds = xr.open_dataset(cfgstr['input']['datafile'], chunks=chunks)
+
 
     # Remove 'uncertainty' if present in Dataset 
     if 'uncertainty' in ds.variables:
