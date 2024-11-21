@@ -120,6 +120,11 @@ def calculate_anomaly(dataset,cfgstr,mylog):
 
                 if len(dataset.dims) > 2:
                     print('The dataset has more than 4 dimensions.')
+
+                    #TODO Add logic for masking
+                    # Masking values greater than 100% 
+                    #dataset = dataset.where(dataset[var_name] < 100)
+
                     # Compute mean of the Dataset
                     mean = dataset[var_name].mean(dim='time')
                     
@@ -177,7 +182,7 @@ def calculate_anomaly(dataset,cfgstr,mylog):
 
         return   
 
-
+#TODO Better handling of dimensions 
 # Get dimensions using ncdump
 def get_dimensions(file_pattern):
     filenames = glob.glob(file_pattern)
@@ -192,7 +197,9 @@ def get_dimensions(file_pattern):
                 parts = line.split(' = ')
                 if len(parts) == 2 and parts[1].endswith(' ;'):
                     key = parts[0].lstrip()  # Remove leading whitespace
-                    dimensions[key] = int(parts[1].rstrip(' ;'))
+                    value = int(parts[1].rstrip(' ;'))
+                    if value != 1:      # Skip dimensions with a size of 1
+                        dimensions[key] = value
     print(f'Dimensions found in the dataset: {dimensions}') 
     return dimensions
 
@@ -238,6 +245,8 @@ def main():
         chunks = {dim_names[0]: dimensions[dim_names[0]] // 3, dim_names[1]: dimensions[dim_names[1]] // 2, dim_names[2]: dimensions[dim_names[2]] // 2}
     elif len(dim_names) == 2:
         chunks = {dim_names[0]: dimensions[dim_names[0]] // 2, dim_names[1]: dimensions[dim_names[1]] // 2}
+    elif len(dim_names) == 4:
+        chunks = {dim_names[0]: dimensions[dim_names[0]] // 2, dim_names[1]: dimensions[dim_names[1]] // 2, dim_names[2]: dimensions[dim_names[2]] // 2, dim_names[3]: dimensions[dim_names[3]] // 2}
 
     
     # Load either single or multiple dataset
