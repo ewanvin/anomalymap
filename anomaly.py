@@ -210,7 +210,7 @@ def write_to_netcdf(dataset, cfgstr, period):
     dims = list(dataset.sizes.keys())
     #print('dims:',dims)
     chunksizes = []
-    encoding_dict = {cfgstr['input']['variable']: {'zlib': True, 'complevel': 9, 'dtype': 'float64'}}
+    encoding_dict = {cfgstr['input']['variable']: {'zlib': True, 'complevel': 4, 'dtype': 'float64'}}
 
     # Calculate chunksizes for each dimension
     for dim in dims:
